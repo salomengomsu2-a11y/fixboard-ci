@@ -158,4 +158,36 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+                    git pull --rebase origin main
+          sed -i -E "s|(image: .*/backend:).*|\1$TAG|" k8s/05-backend.yaml
+          sed -i -E "s|(image: .*/frontend:).*|\1$TAG|" k8s/06-frontend.yaml
+          git add k8s/05-backend.yaml k8s/06-frontend.yaml
+          if ! git diff --cached --quiet; then
+            git commit -m "Release $TAG [skip ci]"
+            git push origin main
+          else
+            echo "Image tags already up to date"
+          fi
+
+  verify:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      ARGOCD_SERVER: ${{ vars.ARGOCD_SERVER }}
+      ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+    steps:
+      - name: Install the ArgoCD CLI
+        run: |
+          curl -sSL -o argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo install -m 755 argocd /usr/local/bin/argocd
+
+      - name: Wait for ArgoCD to deploy the release
+        run: |
+          argocd app get fixboard --refresh --grpc-web > /dev/null
+          argocd app wait fixboard --sync --health --timeout 300 --grpc-web
+
+      - name: Smoke test the live site
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "${{ vars.APP_URL }}/" > /dev/null
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "${{ vars.APP_URL }}/api/health"
